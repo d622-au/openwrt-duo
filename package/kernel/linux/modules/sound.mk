@@ -270,6 +270,33 @@ endef
 $(eval $(call KernelPackage,sound-soc-mt7986-wm8960))
 
 
+define KernelPackage/sound-soc-cv1800b
+  TITLE:=Sophgo CV1800B/SG200x audio support
+  KCONFIG:= \
+	CONFIG_SND_SOC_CV1800B_TDM \
+	CONFIG_SND_SOC_CV1800B_ADC_CODEC \
+	CONFIG_SND_SOC_CV1800B_DAC_CODEC \
+	CONFIG_SND_SIMPLE_CARD \
+	CONFIG_SND_SIMPLE_CARD_UTILS
+  FILES:= \
+	$(LINUX_DIR)/sound/soc/sophgo/cv1800b-tdm.ko \
+	$(LINUX_DIR)/sound/soc/sophgo/cv1800b-sound-adc.ko \
+	$(LINUX_DIR)/sound/soc/sophgo/cv1800b-sound-dac.ko \
+	$(LINUX_DIR)/sound/soc/generic/snd-soc-simple-card-utils.ko \
+	$(LINUX_DIR)/sound/soc/generic/snd-soc-simple-card.ko
+  AUTOLOAD:=$(call AutoLoad,57,snd-soc-simple-card-utils cv1800b-tdm cv1800b-sound-adc cv1800b-sound-dac snd-soc-simple-card)
+  DEPENDS:=@TARGET_cv18x0 +kmod-sound-soc-core
+  $(call AddDepends/sound)
+endef
+
+define KernelPackage/sound-soc-cv1800b/description
+ Support for the on-chip I2S/TDM controller and internal ADC/DAC audio
+ codecs found on Sophgo CV1800B / SG2002 / SG2000 (Milk-V Duo family).
+endef
+
+$(eval $(call KernelPackage,sound-soc-cv1800b))
+
+
 define KernelPackage/sound-soc-imx-sgtl5000
   TITLE:=IMX SoC support for SGTL5000
   KCONFIG:=CONFIG_SND_SOC_IMX_SGTL5000

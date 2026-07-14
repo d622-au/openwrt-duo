@@ -1,0 +1,57 @@
+ASoC: sophgo: cv1800b: local fixes for the machine-card integration
+
+Two local fixes on top of the original driver submission (which shipped
+without any machine driver or DTS wiring):
+
+1. cv1800b-tdm: accept a zero set_sysclk frequency. When the audio is
+   wired up with a simple-audio-card that sets mclk-fs, the ASoC core
+   calls snd_soc_dai_set_sysclk(cpu_dai, 0, 0, ...) on stream shutdown
+   to release the clock. cv1800b_i2s_dai_set_sysclk() forwarded the zero
+   frequency into the mclk divider math, where cv1800b_calc_mclk_div()
+   returns -EINVAL, so the machine hw_params/shutdown path failed with
+   -22 and capture never ran. Treat a zero frequency as "nothing to do".
+
+2. cv1800b-sound-adc: fix the capture rate running exactly 2x too fast.
+   The ADC BCLK divider formula carried a spurious *2 in the divisor:
+   with the 12.288 MHz MCLK at 48 kHz it computed a divider of 4
+   (BCLK 3.072 MHz, LRCK = BCLK/32 = 96 kHz), so a 10 s recording
+   completed in 5.0 s of wall time and played back an octave high.
+   Removing the *2 doubles the divider (BCLK 1.536 MHz) and yields a
+   true 48 kHz frame clock.
+
+Local fixes (candidates for upstream); not part of the original driver
+submission.
+
+Signed-off-by: d622 <300083818+d622-au@users.noreply.github.com>
+
+diff --git a/sound/soc/sophgo/cv1800b-tdm.c b/sound/soc/sophgo/cv1800b-tdm.c
+index 4cbac8c..ba81fdf 100644
+--- a/sound/soc/sophgo/cv1800b-tdm.c
++++ b/sound/soc/sophgo/cv1800b-tdm.c
+@@ -536,6 +536,15 @@ static int cv1800b_i2s_dai_set_sysclk(struct snd_soc_dai *dai, int clk_id,
+ 	bool output_enable = (dir == SND_SOC_CLOCK_OUT) ? true : false;
+ 
+ 	dev_dbg(i2s->dev, "%s called with %u\n", __func__, freq);
++
++	/*
++	 * Machine drivers (e.g. simple-audio-card with mclk-fs) call
++	 * set_sysclk with freq == 0 on shutdown to release the clock.
++	 * Nothing to program in that case; just accept it.
++	 */
++	if (freq == 0)
++		return 0;
++
+ 	ret = cv1800b_i2s_set_rate_for_mclk(i2s, freq);
+ 	if (ret)
+ 		return ret;
+--- a/sound/soc/sophgo/cv1800b-sound-adc.c
++++ b/sound/soc/sophgo/cv1800b-sound-adc.c
+@@ -106,7 +106,7 @@
+ 		return -EINVAL;
+ 
+ 	tmp = div_u64(priv->mclk_rate, CV1800B_RXADC_WORD_LEN *
+-		      CV1800B_RXADC_CHANNELS * rate * 2);
++		      CV1800B_RXADC_CHANNELS * rate);
+ 
+ 	if (!tmp) {
+ 		dev_err(priv->dev, "computed BCLK divider is zero\n");

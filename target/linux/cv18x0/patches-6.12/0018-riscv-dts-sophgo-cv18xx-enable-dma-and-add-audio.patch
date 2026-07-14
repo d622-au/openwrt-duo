@@ -1,0 +1,123 @@
+riscv: dts: sophgo: cv18xx: enable DMA and add on-chip audio
+
+Enable the dw-axi-dmac (using the "sophgo,cv1800b-axi-dma" compatible so
+the multiplexer can pass the channel number) and add the CV1800B/SG200x
+DMA multiplexer node under the top syscon. Add the on-chip audio: the
+I2S0 (i2s_tdm_0) controller, the internal ADC (RXADC @ 0x0300a100) and
+DAC (TXDAC @ 0x0300a000) codecs, and a simple-audio-card tying them
+together. Register addresses, clocks, DMA request lines and the codec<->
+I2S0 routing come from the SG2002/CV1800B TRM; by reset default I2S_TDM_0
+takes its clock/frame/data from the internal audio codec.
+
+This node is shared by all three Duo boards (cv1800b / SG2002 / SG2000)
+via cv18xx.dtsi.
+
+Signed-off-by: d622 <300083818+d622-au@users.noreply.github.com>
+
+diff --git a/arch/riscv/boot/dts/sophgo/cv18xx.dtsi b/arch/riscv/boot/dts/sophgo/cv18xx.dtsi
+index b643e72..681e2cb 100644
+--- a/arch/riscv/boot/dts/sophgo/cv18xx.dtsi
++++ b/arch/riscv/boot/dts/sophgo/cv18xx.dtsi
+@@ -48,6 +48,47 @@
+ 		#clock-cells = <0>;
+ 	};
+ 
++	sound {
++		compatible = "simple-audio-card";
++		simple-audio-card,name = "cv1800b-audio";
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		/* Playback: I2S0 -> internal DAC codec */
++		simple-audio-card,dai-link@0 {
++			reg = <0>;
++			format = "i2s";
++			mclk-fs = <256>;
++			bitclock-master = <&snd_dac>;
++			frame-master = <&snd_dac>;
++
++			cpu {
++				sound-dai = <&i2s0>;
++			};
++
++			snd_dac: codec {
++				sound-dai = <&dac>;
++			};
++		};
++
++		/* Capture: internal ADC codec -> I2S0 */
++		simple-audio-card,dai-link@1 {
++			reg = <1>;
++			format = "i2s";
++			mclk-fs = <256>;
++			bitclock-master = <&snd_adc>;
++			frame-master = <&snd_adc>;
++
++			cpu {
++				sound-dai = <&i2s0>;
++			};
++
++			snd_adc: codec {
++				sound-dai = <&adc>;
++			};
++		};
++	};
++
+ 	soc {
+ 		compatible = "simple-bus";
+ 		interrupt-parent = <&plic>;
+@@ -66,6 +107,15 @@
+ 			compatible = "sophgo,cv1800-top-syscon",
+ 				     "syscon", "simple-mfd";
+ 			reg = <0x03000000 0x1000>;
++			#address-cells = <1>;
++			#size-cells = <1>;
++
++			dmamux: dma-router@154 {
++				compatible = "sophgo,cv1800b-dmamux";
++				reg = <0x154 0x8>, <0x298 0x4>;
++				#dma-cells = <2>;
++				dma-masters = <&dmac>;
++			};
+ 		};
+ 
+ 		gpio0: gpio@3020000 {
+@@ -365,7 +415,7 @@
+ 		};
+ 
+ 		dmac: dma-controller@4330000 {
+-			compatible = "snps,axi-dma-1.01a";
++			compatible = "sophgo,cv1800b-axi-dma";
+ 			reg = <0x04330000 0x1000>;
+ 			interrupts = <29 IRQ_TYPE_LEVEL_HIGH>;
+ 			clocks = <&clk CLK_SDMA_AXI>, <&clk CLK_SDMA_AXI>;
+@@ -377,7 +427,28 @@
+ 			snps,priority = <0 1 2 3 4 5 6 7>;
+ 			snps,dma-masters = <2>;
+ 			snps,data-width = <4>;
+-			status = "disabled";
++		};
++
++		i2s0: i2s@4100000 {
++			compatible = "sophgo,cv1800b-i2s";
++			reg = <0x04100000 0x8000>;
++			clocks = <&clk CLK_APB_I2S0>, <&clk CLK_SDMA_AUD0>;
++			clock-names = "i2s", "mclk";
++			dmas = <&dmamux 0 1>, <&dmamux 1 1>;
++			dma-names = "rx", "tx";
++			#sound-dai-cells = <0>;
++		};
++
++		adc: audio-codec@300a100 {
++			compatible = "sophgo,cv1800b-sound-adc";
++			reg = <0x0300a100 0x100>;
++			#sound-dai-cells = <0>;
++		};
++
++		dac: audio-codec@300a000 {
++			compatible = "sophgo,cv1800b-sound-dac";
++			reg = <0x0300a000 0x100>;
++			#sound-dai-cells = <0>;
+ 		};
+ 
+ 		plic: interrupt-controller@70000000 {
