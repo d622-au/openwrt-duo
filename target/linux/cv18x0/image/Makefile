@@ -86,4 +86,21 @@ define Device/milkv_duo256m
 endef
 TARGET_DEVICES += milkv_duo256m
 
+define Device/milkv_duos
+  $(call Device/FitImageLzma)
+  DEVICE_VENDOR := MilkV
+  DEVICE_MODEL := Duo S
+  SOC := sg2000
+  DEVICE_DTS := $$(SOC)-milkv-duos
+  DEVICE_PACKAGES := opensbi_generic
+  UBOOT := milkv_duo
+  DDRPARAM := cv181x_ddr_param.bin
+  # The SG2000 (Duo S) shares the SG2002 256M's boot chain: the CV181x
+  # FSBL build is identical (cv181x / ddr3_1866_x16) and auto-detects
+  # the 512 MiB DDR3 density from package strapping, so the prebuilt
+  # FIP is the same bytes under a per-device name.
+  FIP := fip_milkv_duos.bin
+endef
+TARGET_DEVICES += milkv_duos
+
 $(eval $(call BuildImage))
