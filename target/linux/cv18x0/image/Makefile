@@ -73,4 +73,17 @@ define Device/milkv_duo
 endef
 TARGET_DEVICES += milkv_duo
 
+define Device/milkv_duo256m
+  $(call Device/FitImageLzma)
+  DEVICE_VENDOR := MilkV
+  DEVICE_MODEL := Duo 256M
+  SOC := sg2002
+  DEVICE_DTS := $$(SOC)-milkv-duo256m
+  DEVICE_PACKAGES := opensbi_generic
+  UBOOT := milkv_duo
+  DDRPARAM := cv181x_ddr_param.bin
+  FIP := fip_milkv_duo256m.bin
+endef
+TARGET_DEVICES += milkv_duo256m
+
 $(eval $(call BuildImage))
