@@ -10,6 +10,18 @@ FAT32_BLOCKS=$(shell echo $$(($(CONFIG_CV18X0_SD_BOOT_PARTSIZE)*1024*1024/$(FAT3
 
 KERNEL_LOADADDR:=0x80200000
 
+# The FIP (BL2 + DDR params + OpenSBI + U-Boot) placed in the FAT boot
+# partition is currently taken from a known-good prebuilt file,
+# ./prebuilt/$(FIP) (not tracked in git), rather than from the fiptool
+# output. Recreating fip.bin from the in-tree components is a separate,
+# future activity. The fiptool step below is kept so the entire firmware
+# chain (cv18xxlibs BL2 blobs, OpenSBI, U-Boot, the fiptool host tool)
+# continues to build; only the copy into the boot partition differs.
+# The FIP is per-device because the BL2/FSBL inside it is chip-family
+# specific: a cv180x (CV1800B) BL2 panics on cv181x (SG2000/SG2002)
+# silicon and vice versa -- the mask ROM log ends in "E:RESET:panic:-1".
+DEVICE_VARS += FIP
+
 define Build/riscv-sdcard
 	rm -f $@.boot #$(KDIR_TMP)/$(IMG_PREFIX)-$(PROFILE)-boot.img
 	mkfs.fat $@.boot  -C $(FAT32_BLOCKS)
@@ -21,7 +33,8 @@ define Build/riscv-sdcard
 		--rtos /dev/null \
 		$(STAGING_DIR_IMAGE)/fip_milkv_duo.bin
 
-	mcopy -i $@.boot $(STAGING_DIR_IMAGE)/fip_milkv_duo.bin ::fip.bin
+	[ -s ./prebuilt/$(FIP) ] || { echo "ERROR: prebuilt boot firmware ./prebuilt/$(FIP) is missing (see comment above Build/riscv-sdcard)" >&2; exit 1; }
+	mcopy -i $@.boot ./prebuilt/$(FIP) ::fip.bin
 	mcopy -i $@.boot $(IMAGE_KERNEL) ::sd.boot
 
 	./gen_cv18x0_sdcard_img.sh \
@@ -56,6 +69,7 @@ define Device/milkv_duo
   DEVICE_PACKAGES := opensbi_generic
   UBOOT := milkv_duo
   DDRPARAM := cv181x_ddr_param.bin
+  FIP := fip_milkv_duo.bin
 endef
 TARGET_DEVICES += milkv_duo
 
