@@ -1,0 +1,11 @@
+--- a/arch/riscv/boot/dts/sophgo/cv1800b-milkv-duo.dts
++++ b/arch/riscv/boot/dts/sophgo/cv1800b-milkv-duo.dts
+@@ -20,7 +20,8 @@
+ 	};
+
+ 	chosen {
+ 		stdout-path = "serial0:115200n8";
++		bootargs = "root=/dev/mmcblk0p2 rootwait rw";
+ 	};
+
+ 	reserved-memory {
