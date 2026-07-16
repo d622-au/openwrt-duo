@@ -1,0 +1,228 @@
+thermal: add a driver for the Sophgo CV18xx TEMPSEN block
+
+The CV18xx/SG200x SoCs have an on-chip temperature sensor (TEMPSEN,
+0x030e0000, clocked by CLK_TEMPSEN off the 25 MHz oscillator). There
+is no mainline driver for it (checked up to 7.2-rc), so this is a new,
+minimal driver written against the 6.12 thermal API. The register
+programming (acquisition setup, DDR refresh-rate threshold defaults
+and the result-to-millicelsius formula, T[mC] = raw * 716000 / 2048 -
+273000) is taken from the vendor 5.10 cv181x_thermal.c, which this
+driver replaces functionally; the vendor's thermal_zone_of_sensor API
+and per-channel boilerplate are gone, and only channel 0 -- the only
+one the vendor driver ever read -- is exposed, via
+devm_thermal_of_zone_register().
+
+The sensor free-runs one measurement about every 2 s once enabled;
+get_temp() just reads the latest CH0 result. A zero result (only seen
+before the first conversion completes) returns -EAGAIN rather than
+being converted to -273 degC. Like the vendor kernel, the driver also
+programs the DDR high/low temperature thresholds and enables the
+block's DDR auto-refresh-rate control output.
+
+Signed-off-by: d622 <300083818+d622-au@users.noreply.github.com>
+
+diff --git a/drivers/thermal/Kconfig b/drivers/thermal/Kconfig
+index aaaaaaa..bbbbbbb 100644
+--- a/drivers/thermal/Kconfig
++++ b/drivers/thermal/Kconfig
+@@ -241,6 +241,17 @@ config THERMAL_MMIO
+ 	  register or shared memory, is a potential candidate to work with this
+ 	  driver.
+ 
++config CV18XX_THERMAL
++	tristate "Sophgo CV18xx TEMPSEN thermal driver"
++	depends on ARCH_SOPHGO || COMPILE_TEST
++	depends on HAS_IOMEM
++	depends on OF
++	depends on THERMAL_OF
++	help
++	  Enable this to support the on-chip temperature sensor (TEMPSEN)
++	  of the Sophgo CV18xx / SG200x SoC family, exposed as a standard
++	  thermal zone.
++
+ config HISI_THERMAL
+ 	tristate "Hisilicon thermal driver"
+ 	depends on ARCH_HISI || COMPILE_TEST
+diff --git a/drivers/thermal/Makefile b/drivers/thermal/Makefile
+index ccccccc..ddddddd 100644
+--- a/drivers/thermal/Makefile
++++ b/drivers/thermal/Makefile
+@@ -35,6 +35,7 @@ obj-$(CONFIG_K3_THERMAL)	+= k3_bandgap.o k3_j72xx_bandgap.o
+ # platform thermal drivers
+ obj-y				+= broadcom/
+ obj-$(CONFIG_THERMAL_MMIO)		+= thermal_mmio.o
++obj-$(CONFIG_CV18XX_THERMAL)	+= cv18xx_thermal.o
+ obj-$(CONFIG_SPEAR_THERMAL)	+= spear_thermal.o
+ obj-$(CONFIG_SUN8I_THERMAL)     += sun8i_thermal.o
+ obj-$(CONFIG_ROCKCHIP_THERMAL)	+= rockchip_thermal.o
+diff --git a/drivers/thermal/cv18xx_thermal.c b/drivers/thermal/cv18xx_thermal.c
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/drivers/thermal/cv18xx_thermal.c
+@@ -0,0 +1,165 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Thermal sensor driver for the Sophgo CV18xx SoC family (TEMPSEN block).
++ *
++ * Register programming and conversion formula follow the vendor
++ * cv181x_thermal.c (Copyright 2021 CVITEK Inc.), rewritten for the
++ * modern thermal API.
++ */
++
++#include <linux/bitfield.h>
++#include <linux/clk.h>
++#include <linux/io.h>
++#include <linux/math64.h>
++#include <linux/mod_devicetable.h>
++#include <linux/module.h>
++#include <linux/platform_device.h>
++#include <linux/thermal.h>
++
++#define TEMPSEN_CTRL			0x04
++#define  TEMPSEN_CTRL_EN		BIT(0)
++#define  TEMPSEN_CTRL_SEL		GENMASK(7, 4)
++#define TEMPSEN_SET			0x0c
++#define  TEMPSEN_SET_CHOPSEL		GENMASK(5, 4)
++#define  TEMPSEN_SET_CHOPSEL_1024T	3
++#define  TEMPSEN_SET_ACCSEL		GENMASK(7, 6)
++#define  TEMPSEN_SET_ACCSEL_2048T	2
++#define  TEMPSEN_SET_CYC_CLKDIV		GENMASK(15, 8)
++#define TEMPSEN_INTR_CLR		0x14
++#define TEMPSEN_INTR_RAW		0x1c
++#define TEMPSEN_CH0_RESULT		0x20
++#define  TEMPSEN_CH_RESULT		GENMASK(12, 0)
++#define  TEMPSEN_CH_CLR_MAX_RESULT	BIT(31)
++#define TEMPSEN_DDR_TEMP_CTRL		0x30
++#define  TEMPSEN_DDR_OUT_EN		BIT(0)
++#define TEMPSEN_DDR_TEMP_TH		0x34
++#define  TEMPSEN_DDR_HI_TH		GENMASK(12, 0)
++#define  TEMPSEN_DDR_LO_TH		GENMASK(28, 16)
++#define TEMPSEN_AUTO_CYCLE		0x64
++#define  TEMPSEN_AUTO_CYCLE_VAL		GENMASK(23, 0)
++
++struct cv18xx_thermal {
++	void __iomem *base;
++};
++
++static void cv18xx_thermal_update(struct cv18xx_thermal *ct, u32 reg,
++				  u32 mask, u32 val)
++{
++	u32 regval = readl(ct->base + reg);
++
++	regval &= ~mask;
++	regval |= val;
++	writel(regval, ct->base + reg);
++}
++
++static void cv18xx_thermal_init(struct cv18xx_thermal *ct)
++{
++	/* Clear stale interrupt status and the max-result latch. */
++	writel(readl(ct->base + TEMPSEN_INTR_RAW),
++	       ct->base + TEMPSEN_INTR_CLR);
++	cv18xx_thermal_update(ct, TEMPSEN_CH0_RESULT,
++			      TEMPSEN_CH_CLR_MAX_RESULT,
++			      TEMPSEN_CH_CLR_MAX_RESULT);
++
++	/*
++	 * Vendor acquisition setup: chop period 1024T, accumulation
++	 * period 2048T, sensor clock 25 MHz / (0x31 + 1) = 0.5 MHz,
++	 * one automatic measurement about every 2 s.
++	 */
++	cv18xx_thermal_update(ct, TEMPSEN_SET,
++			      TEMPSEN_SET_CHOPSEL | TEMPSEN_SET_ACCSEL |
++			      TEMPSEN_SET_CYC_CLKDIV,
++			      FIELD_PREP(TEMPSEN_SET_CHOPSEL,
++					 TEMPSEN_SET_CHOPSEL_1024T) |
++			      FIELD_PREP(TEMPSEN_SET_ACCSEL,
++					 TEMPSEN_SET_ACCSEL_2048T) |
++			      FIELD_PREP(TEMPSEN_SET_CYC_CLKDIV, 0x31));
++	cv18xx_thermal_update(ct, TEMPSEN_AUTO_CYCLE, TEMPSEN_AUTO_CYCLE_VAL,
++			      FIELD_PREP(TEMPSEN_AUTO_CYCLE_VAL, 0x100000));
++
++	/*
++	 * DDR high/low temperature thresholds (~85/75 degC raw codes)
++	 * and the DDR auto-refresh-rate control signal output, as
++	 * programmed by the vendor kernel.
++	 */
++	cv18xx_thermal_update(ct, TEMPSEN_DDR_TEMP_TH,
++			      TEMPSEN_DDR_HI_TH | TEMPSEN_DDR_LO_TH,
++			      FIELD_PREP(TEMPSEN_DDR_HI_TH, 0x400) |
++			      FIELD_PREP(TEMPSEN_DDR_LO_TH, 0x3e4));
++	cv18xx_thermal_update(ct, TEMPSEN_DDR_TEMP_CTRL, TEMPSEN_DDR_OUT_EN,
++			      TEMPSEN_DDR_OUT_EN);
++
++	/* Enable channel 0 and start the sensor. */
++	cv18xx_thermal_update(ct, TEMPSEN_CTRL,
++			      TEMPSEN_CTRL_SEL | TEMPSEN_CTRL_EN,
++			      FIELD_PREP(TEMPSEN_CTRL_SEL, 1) |
++			      TEMPSEN_CTRL_EN);
++}
++
++static int cv18xx_thermal_get_temp(struct thermal_zone_device *tz, int *temp)
++{
++	struct cv18xx_thermal *ct = thermal_zone_device_priv(tz);
++	u32 result;
++
++	result = FIELD_GET(TEMPSEN_CH_RESULT,
++			   readl(ct->base + TEMPSEN_CH0_RESULT));
++	if (!result)
++		return -EAGAIN;	/* first conversion not finished yet */
++
++	/* Vendor formula: T[mC] = raw * 1000 * 716 / 2048 - 273000. */
++	*temp = (int)div_u64((u64)result * 716000, 2048) - 273000;
++
++	return 0;
++}
++
++static const struct thermal_zone_device_ops cv18xx_thermal_ops = {
++	.get_temp = cv18xx_thermal_get_temp,
++};
++
++static int cv18xx_thermal_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct cv18xx_thermal *ct;
++	struct thermal_zone_device *tz;
++	struct clk *clk;
++
++	ct = devm_kzalloc(dev, sizeof(*ct), GFP_KERNEL);
++	if (!ct)
++		return -ENOMEM;
++
++	ct->base = devm_platform_ioremap_resource(pdev, 0);
++	if (IS_ERR(ct->base))
++		return PTR_ERR(ct->base);
++
++	clk = devm_clk_get_enabled(dev, NULL);
++	if (IS_ERR(clk))
++		return dev_err_probe(dev, PTR_ERR(clk),
++				     "failed to get clock\n");
++
++	cv18xx_thermal_init(ct);
++
++	tz = devm_thermal_of_zone_register(dev, 0, ct, &cv18xx_thermal_ops);
++	if (IS_ERR(tz))
++		return dev_err_probe(dev, PTR_ERR(tz),
++				     "failed to register thermal zone\n");
++
++	return 0;
++}
++
++static const struct of_device_id cv18xx_thermal_of_match[] = {
++	{ .compatible = "sophgo,cv1800b-tempsen" },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, cv18xx_thermal_of_match);
++
++static struct platform_driver cv18xx_thermal_driver = {
++	.probe = cv18xx_thermal_probe,
++	.driver = {
++		.name = "cv18xx-thermal",
++		.of_match_table = cv18xx_thermal_of_match,
++	},
++};
++module_platform_driver(cv18xx_thermal_driver);
++
++MODULE_DESCRIPTION("Sophgo CV18xx TEMPSEN thermal driver");
++MODULE_LICENSE("GPL");

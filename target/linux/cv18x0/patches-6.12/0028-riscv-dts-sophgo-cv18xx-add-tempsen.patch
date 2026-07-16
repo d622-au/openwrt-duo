@@ -1,0 +1,95 @@
+riscv: dts: sophgo: cv18xx: add the TEMPSEN temperature sensor
+
+Describe the on-chip temperature sensor (temperature-sensor@30e0000,
+CLK_TEMPSEN) in the shared cv18xx.dtsi -- the block is identical
+across CV1800B/SG2002/SG2000 -- with status = "disabled", and enable
+it from all three Duo board files, following the SARADC pattern.
+
+A thermal zone polls the sensor once a second and carries a single
+critical trip at 130 degC (the vendor DTS value), which triggers an
+orderly shutdown; there are no cooling devices to bind (no cpufreq on
+this port), so no passive trips or cooling maps are described. The
+zone appears as /sys/class/thermal/thermal_zone0.
+
+Signed-off-by: d622 <300083818+d622-au@users.noreply.github.com>
+
+diff --git a/arch/riscv/boot/dts/sophgo/cv18xx.dtsi b/arch/riscv/boot/dts/sophgo/cv18xx.dtsi
+index aaaaaaa..bbbbbbb 100644
+--- a/arch/riscv/boot/dts/sophgo/cv18xx.dtsi
++++ b/arch/riscv/boot/dts/sophgo/cv18xx.dtsi
+@@ -88,7 +88,23 @@
+ 			};
+ 		};
+ 	};
+ 
++	thermal-zones {
++		soc-thermal {
++			polling-delay-passive = <1000>;
++			polling-delay = <1000>;
++			thermal-sensors = <&tempsen 0>;
++
++			trips {
++				soc-crit {
++					temperature = <130000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++	};
++
+ 	soc {
+ 		compatible = "simple-bus";
+ 		interrupt-parent = <&plic>;
+@@ -476,7 +492,15 @@
+ 			reg = <0x0300a000 0x100>;
+ 			#sound-dai-cells = <0>;
+ 		};
+ 
++		tempsen: temperature-sensor@30e0000 {
++			compatible = "sophgo,cv1800b-tempsen";
++			reg = <0x030e0000 0x100>;
++			clocks = <&clk CLK_TEMPSEN>;
++			#thermal-sensor-cells = <1>;
++			status = "disabled";
++		};
++
+ 		saradc: adc@30f0000 {
+ 			compatible = "sophgo,cv1800b-saradc";
+ 			reg = <0x030f0000 0x1000>;
+diff --git a/arch/riscv/boot/dts/sophgo/cv1800b-milkv-duo.dts b/arch/riscv/boot/dts/sophgo/cv1800b-milkv-duo.dts
+index ccccccc..ddddddd 100644
+--- a/arch/riscv/boot/dts/sophgo/cv1800b-milkv-duo.dts
++++ b/arch/riscv/boot/dts/sophgo/cv1800b-milkv-duo.dts
+@@ -64,3 +64,7 @@
+ &saradc {
+ 	status = "okay";
+ };
++
++&tempsen {
++	status = "okay";
++};
+diff --git a/arch/riscv/boot/dts/sophgo/sg2002-milkv-duo256m.dts b/arch/riscv/boot/dts/sophgo/sg2002-milkv-duo256m.dts
+index eeeeeee..fffffff 100644
+--- a/arch/riscv/boot/dts/sophgo/sg2002-milkv-duo256m.dts
++++ b/arch/riscv/boot/dts/sophgo/sg2002-milkv-duo256m.dts
+@@ -68,3 +68,7 @@
+ &saradc {
+ 	status = "okay";
+ };
++
++&tempsen {
++	status = "okay";
++};
+diff --git a/arch/riscv/boot/dts/sophgo/sg2000-milkv-duos.dts b/arch/riscv/boot/dts/sophgo/sg2000-milkv-duos.dts
+index 1111111..2222222 100644
+--- a/arch/riscv/boot/dts/sophgo/sg2000-milkv-duos.dts
++++ b/arch/riscv/boot/dts/sophgo/sg2000-milkv-duos.dts
+@@ -207,3 +207,7 @@
+ &saradc {
+ 	status = "okay";
+ };
++
++&tempsen {
++	status = "okay";
++};
