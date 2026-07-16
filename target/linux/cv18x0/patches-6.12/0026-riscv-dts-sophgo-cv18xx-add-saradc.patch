@@ -1,0 +1,95 @@
+riscv: dts: sophgo: cv18xx: add SARADC, enable on the Duo family
+
+Wire up the on-SoC 3-channel SARADC (Successive Approximation ADC) so the
+in-tree IIO driver can bind. The driver (drivers/iio/adc/sophgo-cv1800b-adc.c,
+compatible "sophgo,cv1800b-saradc") is already built in via
+CONFIG_SOPHGO_CV1800B_ADC=y -- the only thing missing was a device-tree
+node, so nothing probed and no /sys/bus/iio/devices/iio:device* appeared.
+
+Add the controller to the shared cv18xx.dtsi, disabled by default. The
+SARADC block is identical across the CV1800B, SG2002 and SG2000, so the
+node lives in the common dtsi and each board just flips it on:
+
+  reg        0x030f0000 / 0x1000        (top-domain SARADC)
+  clocks     <&clk CLK_SARADC>
+  interrupts 100 == SOC_PERIPHERAL_IRQ(84), IRQ_TYPE_LEVEL_HIGH
+             (raw number to match this tree's cv18xx.dtsi convention)
+
+Values match the mainline node (arch/riscv/boot/dts/sophgo/cv180x.dtsi in
+newer kernels) and the binding example
+(Documentation/devicetree/bindings/iio/adc/sophgo,cv1800b-saradc.yaml).
+
+Enable the node on all three boards -- Milk-V Duo (CV1800B), Duo 256M
+(SG2002) and Duo S (SG2000) -- exposing in_voltage{0,1,2}_raw plus
+in_voltage_scale (12-bit, 3.3 V reference).
+
+No pin muxing is set here on purpose: the controller probes and all three
+IIO channels become readable without it. A channel whose pad is not muxed
+to the analog input simply reports a floating-input reading rather than a
+meaningful voltage -- correct behaviour, just not useful until the pad is
+routed. The per-board analog-input pad mux is left to a later, board-
+specific change.
+
+Signed-off-by: d622 <300083818+d622-au@users.noreply.github.com>
+
+--- a/arch/riscv/boot/dts/sophgo/cv18xx.dtsi
++++ b/arch/riscv/boot/dts/sophgo/cv18xx.dtsi
+@@ -477,6 +477,28 @@
+ 			#sound-dai-cells = <0>;
+ 		};
+
++		saradc: adc@30f0000 {
++			compatible = "sophgo,cv1800b-saradc";
++			reg = <0x030f0000 0x1000>;
++			clocks = <&clk CLK_SARADC>;
++			interrupts = <100 IRQ_TYPE_LEVEL_HIGH>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++			status = "disabled";
++
++			channel@0 {
++				reg = <0>;
++			};
++
++			channel@1 {
++				reg = <1>;
++			};
++
++			channel@2 {
++				reg = <2>;
++			};
++		};
++
+ 		plic: interrupt-controller@70000000 {
+ 			reg = <0x70000000 0x4000000>;
+ 			interrupts-extended = <&cpu0_intc 11>, <&cpu0_intc 9>;
+--- a/arch/riscv/boot/dts/sophgo/cv1800b-milkv-duo.dts
++++ b/arch/riscv/boot/dts/sophgo/cv1800b-milkv-duo.dts
+@@ -60,3 +60,7 @@
+ &watchdog0 {
+ 	status = "okay";
+ };
++
++&saradc {
++	status = "okay";
++};
+--- a/arch/riscv/boot/dts/sophgo/sg2002-milkv-duo256m.dts
++++ b/arch/riscv/boot/dts/sophgo/sg2002-milkv-duo256m.dts
+@@ -64,3 +64,7 @@
+ &watchdog0 {
+ 	status = "okay";
+ };
++
++&saradc {
++	status = "okay";
++};
+--- a/arch/riscv/boot/dts/sophgo/sg2000-milkv-duos.dts
++++ b/arch/riscv/boot/dts/sophgo/sg2000-milkv-duos.dts
+@@ -237,3 +237,7 @@
+ 		line-name = "cam0-reset-release";
+ 	};
+ };
++
++&saradc {
++	status = "okay";
++};
