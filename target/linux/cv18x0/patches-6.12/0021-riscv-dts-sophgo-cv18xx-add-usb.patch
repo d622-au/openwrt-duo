@@ -1,0 +1,63 @@
+riscv: dts: sophgo: cv18xx: add USB (DWC2 + PHY) nodes
+
+Add the DWC2 USB OTG controller (usb@4340000) and its USB 2.0 PHY
+(phy@48, a child of the top syscon so the PHY driver can grab the
+parent regmap). Both are shared by all three Duo boards via cv18xx.dtsi
+and left status = "disabled"; a board enables and sets dr_mode.
+
+Two deliberate deltas from the mainline (v7.2) nodes so this applies to
+the 6.12 kernel:
+ - controller compatible is "sophgo,cv1800-usb" (no "b"): that is the
+   string this kernel's dwc2/params.c matches to apply the cv1800 core
+   params. Mainline renamed it to "sophgo,cv1800b-usb" later.
+ - the PHY node drops "resets = <&rst RST_COMBO_PHY0>": that macro does
+   not exist in this kernel's reset header and the PHY driver never
+   requests the reset.
+The USB IRQ is 30 (mainline SOC_PERIPHERAL_IRQ(14) = 14 + 16).
+
+Signed-off-by: d622 <300083818+d622-au@users.noreply.github.com>
+
+diff --git a/arch/riscv/boot/dts/sophgo/cv18xx.dtsi b/arch/riscv/boot/dts/sophgo/cv18xx.dtsi
+index aaaaaaa..bbbbbbb 100644
+--- a/arch/riscv/boot/dts/sophgo/cv18xx.dtsi
++++ b/arch/riscv/boot/dts/sophgo/cv18xx.dtsi
+@@ -110,6 +110,16 @@
+ 			#address-cells = <1>;
+ 			#size-cells = <1>;
+ 
++			usbphy: phy@48 {
++				compatible = "sophgo,cv1800b-usb2-phy";
++				reg = <0x48 0x4>;
++				#phy-cells = <0>;
++				clocks = <&clk CLK_USB_125M>,
++					 <&clk CLK_USB_33K>,
++					 <&clk CLK_USB_12M>;
++				clock-names = "app", "stb", "lpm";
++			};
++
+ 			dmamux: dma-router@154 {
+ 				compatible = "sophgo,cv1800b-dmamux";
+ 				reg = <0x154 0x8>, <0x298 0x4>;
+@@ -429,6 +439,22 @@
+ 			snps,data-width = <4>;
+ 		};
+ 
++		usb: usb@4340000 {
++			compatible = "sophgo,cv1800-usb";
++			reg = <0x04340000 0x10000>;
++			clocks = <&clk CLK_AXI4_USB>, <&clk CLK_APB_USB>;
++			clock-names = "otg", "utmi";
++			g-np-tx-fifo-size = <32>;
++			g-rx-fifo-size = <1536>;
++			g-tx-fifo-size = <128 128 64 64 64 64 32 32>;
++			interrupts = <30 IRQ_TYPE_LEVEL_HIGH>;
++			phys = <&usbphy>;
++			phy-names = "usb2-phy";
++			resets = <&rst RST_USB>;
++			reset-names = "dwc2";
++			status = "disabled";
++		};
++
+ 		i2s0: i2s@4100000 {
+ 			compatible = "sophgo,cv1800b-i2s";
+ 			reg = <0x04100000 0x8000>;
