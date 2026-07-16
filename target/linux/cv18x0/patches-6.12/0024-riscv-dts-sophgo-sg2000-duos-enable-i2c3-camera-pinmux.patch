@@ -1,0 +1,128 @@
+riscv: dts: sophgo: sg2000: milkv-duos: enable I2C3 + camera-0 pinmux
+
+Milestone 0 of MIPI CSI camera support on the Milk-V Duo S: bring up the
+GC2083 camera's *control plane* so the sensor is reachable from user
+space (i2cdetect -y 3 -> 0x37). The MIPI D-PHY data lanes and the capture
+pipeline are out of scope -- this 6.12 tree has no CV1800B CSI-2 receiver
+or ISP driver, and none is upstream yet -- but the I2C bus and the pad mux
+added here are reused verbatim by whatever camera stack lands later (a
+mainline V4L2 sensor subdev, or a forward-port of the vendor cif bridge),
+because the pin assignment is a fixed board fact either way.
+
+The J1 FPC connector on the Duo S wires the camera to I2C3 (SCL/SDA),
+CAM_MCLK0 (sensor master clock) and CAM_RST0 (SENSOR_RSTN0, muxed to
+GPIO porta 2). The SoC I2C controllers already exist in cv18xx.dtsi
+(snps,designware-i2c) but ship status = "disabled"; i2c3 is enabled here
+and given the I2C3 pin group. The pin groups extend the SG2000 pin
+controller instantiated for the eMMC (patch 0023). Pads and mux values
+are taken from the vendor board file:
+
+  build/boards/cv181x/sg2000_milkv_duos_.../u-boot/cvi_board_init.c
+    PINMUX_CONFIG(IIC3_SCL, IIC3_SCL);    -> func 0
+    PINMUX_CONFIG(IIC3_SDA, IIC3_SDA);    -> func 0
+    PINMUX_CONFIG(CAM_MCLK0, CAM_MCLK0);  -> func 0
+    PINMUX_CONFIG(CAM_RST0, XGPIOA_2);    -> func 3 (GPIO porta 2)
+
+All four pads are on the 1.8 V VDD18A_MIPI domain, so power-source =
+<1800> (mandatory for every group in this pinctrl driver). Like the
+vendor we only mux, without setting internal bias: the board carries
+external 4.7k I2C3 pull-ups to 1.8 V. An i2c3 alias pins the bus to
+/dev/i2c-3 (matching the connector name and the vendor user-space's
+hard-coded bus number) instead of a dynamic index.
+
+Each group MUST wrap its pinmux/power-source in a child sub-node: this
+pinctrl driver's dt_node_to_map walks the child nodes of the referenced
+group (for_each_available_child_of_node), exactly like the eMMC group in
+patch 0023. A flat group produces zero maps -- the pads are silently left
+at their reset default and the controller logs "there is not valid maps
+for state default".
+
+The MCLK and reset pads are muxed here (a permanent board fact) but only
+*routed*: the CAM0 clock stays gated and the reset line is not driven --
+enabling MCLK and releasing reset are inherently camera-driver
+responsibilities and are done, for bench testing only, in the separate
+patch 0025.
+
+Needs CONFIG_I2C_DESIGNWARE_PLATFORM (+ _CORE) and CONFIG_I2C_CHARDEV in
+config-6.12 (replacing the unused CONFIG_I2C_OCORES).
+
+Signed-off-by: d622 <300083818+d622-au@users.noreply.github.com>
+
+--- a/arch/riscv/boot/dts/sophgo/sg2000-milkv-duos.dts
++++ b/arch/riscv/boot/dts/sophgo/sg2000-milkv-duos.dts
+@@ -131,3 +131,75 @@
+ 		status = "okay";
+ 	};
+ };
++
++&{/aliases} {
++	i2c3 = &i2c3;
++};
++
++/*
++ * Camera 0 / J1 CSI connector (CAM-GC2083) -- Milestone 0: sensor control
++ * plane only. Bring up I2C3 plus the sensor's MCLK and reset pads so the
++ * GC2083 is reachable from user space:
++ *
++ *   i2cdetect -y 3   ->   device at 0x37
++ *
++ * The MIPI D-PHY data lanes and any capture pipeline are deliberately out of
++ * scope: this 6.12 tree has no in-tree CV1800B CSI-2 receiver / ISP driver,
++ * and none is upstream. This patch is the part that is reused verbatim by
++ * whatever camera stack lands later -- a mainline V4L2 sensor subdev, or a
++ * forward-port of the vendor cif bridge -- because the pad mux is a fixed
++ * board fact either way.
++ *
++ * Pads + mux values are taken from the vendor board file
++ *   build/boards/cv181x/sg2000_milkv_duos_.../u-boot/cvi_board_init.c:
++ *     PINMUX_CONFIG(IIC3_SCL, IIC3_SCL);   -> I2C3 SCL (func 0)
++ *     PINMUX_CONFIG(IIC3_SDA, IIC3_SDA);   -> I2C3 SDA (func 0)
++ *     PINMUX_CONFIG(CAM_MCLK0, CAM_MCLK0); -> sensor MCLK (func 0)
++ *     PINMUX_CONFIG(CAM_RST0, XGPIOA_2);   -> GPIO porta 2 == SENSOR_RSTN0 (func 3)
++ * All four pads are on the 1.8 V VDD18A_MIPI domain, so power-source = <1800>.
++ * Like the vendor we only mux (no bias): I2C3 has external 4.7k pull-ups to
++ * 1.8 V on-board.
++ *
++ * NOTE the two-level group structure: this pinctrl driver's dt_node_to_map
++ * walks the *child* nodes of each referenced node (for_each_available_child_
++ * of_node), so every group label must wrap its pinmux/power-source in a
++ * sub-node -- exactly like the eMMC group in patch 0023. A flat group yields
++ * zero maps ("i2c_designware ...: there is not valid maps for state default")
++ * and the pads are silently left at their reset default.
++ *
++ * i2c3 owns the pin groups only because it is the sole probing node here; that
++ * just leaves the MCLK pad routed to the (still-gated) CAM0 clock and the
++ * reset pad in GPIO mode -- both harmless. The *dynamic* half (turning MCLK on,
++ * driving reset) is inherently driver-owned and lives in the separate bring-up
++ * patch 0025 for bench testing.
++ */
++&{/soc/pinctrl@3001000} {
++	i2c3_pins: i2c3-pins {
++		i2c3-grp {
++			pinmux = <PINMUX(PIN_IIC3_SCL, 0)>,
++				 <PINMUX(PIN_IIC3_SDA, 0)>;
++			power-source = <1800>;
++		};
++	};
++
++	cam0_mclk_pins: cam0-mclk-pins {
++		cam0-mclk-grp {
++			pinmux = <PINMUX(PIN_CAM_MCLK0, 0)>;
++			power-source = <1800>;
++		};
++	};
++
++	cam0_rst_pins: cam0-rst-pins {
++		cam0-rst-grp {
++			pinmux = <PINMUX(PIN_CAM_RST0, 3)>;
++			power-source = <1800>;
++		};
++	};
++};
++
++&i2c3 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&i2c3_pins &cam0_mclk_pins &cam0_rst_pins>;
++	clock-frequency = <100000>;
++	status = "okay";
++};
