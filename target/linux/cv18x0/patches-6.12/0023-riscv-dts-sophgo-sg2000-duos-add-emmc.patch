@@ -1,0 +1,110 @@
+riscv: dts: sophgo: sg2000: milkv-duos: add on-board eMMC
+
+Add and enable the CV181x eMMC controller (mmc@4300000) on the Milk-V
+Duo S. This third MMC instance exists on the SG2000/CV181x family but
+not on the plain CV1800B, so the shared cv18xx.dtsi -- which the Duo S
+board file inherits from the 64 MiB Duo via cv1800b.dtsi -- does not
+describe it. Add it in the board file, the only Duo-family board that
+populates eMMC.
+
+The in-tree sdhci-of-dwcmshc driver already bound to the microSD
+(compatible sophgo,cv1800b-dwcmshc) drives this controller too and does
+all PHY tuning in-kernel. The Duo S wires four data lines to a
+non-removable eMMC with a hardware reset line; the VDDIO_SD0_EMMC rail
+is shared with the 3.3 V microSD, so eMMC I/O is fixed 3.3 V -- high
+speed only, no HS200/HS400. The eMMC enumerates as mmc1 -> /dev/mmcblk1,
+leaving the microSD rootfs on mmcblk0 untouched.
+
+Because the board boots from the microSD, the eMMC pads are never
+configured: the vendor FSBL only runs its emmc_pad_setting() in the
+eMMC-boot path, and the reused milkv_duo U-Boot never touches eMMC. The
+eMMC CMD/DAT pads are open-drain (TRM "18OD33"), so left floating the
+card never answers CMD1 ("mmc1: Failed to initialize a non-removable
+card"). This 6.12 target ships no pinctrl at all, so instantiate the
+SG2000 pin controller and add an eMMC pin group replicating the FSBL:
+mux the pads to eMMC (function 0), pull-up on CMD/DAT/RSTN, pull-down on
+CLK, at 3.3 V. The pinctrl driver writes no mux at probe -- only the
+eMMC pins referenced here are touched, so the FSBL-configured microSD /
+UART / Ethernet / USB pads are left untouched.
+
+Needs CONFIG_PINCTRL_SOPHGO_SG2000 (selects PINCTRL_SOPHGO_CV18XX).
+
+Signed-off-by: d622 <300083818+d622-au@users.noreply.github.com>
+
+diff --git a/arch/riscv/boot/dts/sophgo/sg2000-milkv-duos.dts b/arch/riscv/boot/dts/sophgo/sg2000-milkv-duos.dts
+index eeeeeee..fffffff 100644
+--- a/arch/riscv/boot/dts/sophgo/sg2000-milkv-duos.dts
++++ b/arch/riscv/boot/dts/sophgo/sg2000-milkv-duos.dts
+@@ -15,6 +15,7 @@
+ /dts-v1/;
+ 
+ #include "cv1800b.dtsi"
++#include <dt-bindings/pinctrl/pinctrl-sg2000.h>
+ 
+ / {
+ 	model = "Milk-V Duo S";
+@@ -69,3 +70,64 @@
+ 	dr_mode = "host";
+ 	status = "okay";
+ };
++
++/*
++ * On-board 8 GiB eMMC on the CV181x-only third MMC controller, which the
++ * shared cv18xx.dtsi (from the CV1800B, that lacks it) does not describe.
++ * Driven by the same in-tree sophgo,cv1800b-dwcmshc driver as the microSD,
++ * with all PHY tuning done in-kernel.
++ *
++ * Because we boot from the microSD, neither the FSBL (which only configures
++ * the eMMC pads in its eMMC-boot path) nor U-Boot ever sets up the eMMC
++ * pins. The eMMC CMD/DAT pads are open-drain (TRM "18OD33"), so without
++ * pull-ups they float and the card never answers CMD1 ("Failed to
++ * initialize a non-removable card"). This 6.12 target carries no pinctrl
++ * at all, so we instantiate the SG2000 pin controller and add an eMMC pin
++ * group here, replicating the vendor FSBL emmc_pad_setting(): mux the pads
++ * to eMMC (function 0), pull-up on CMD/DAT/RSTN, pull-down on CLK. The
++ * VDDIO_SD0_EMMC rail is shared with the (3.3 V) microSD, so eMMC I/O is
++ * fixed 3.3 V -- high speed only, no HS200 (which needs 1.8 V).
++ */
++&{/soc} {
++	pinctrl@3001000 {
++		compatible = "sophgo,sg2000-pinctrl";
++		reg = <0x03001000 0x1000>,
++		      <0x05027000 0x1000>;
++		reg-names = "sys", "rtc";
++
++		emmc_pins: emmc-pins {
++			emmc-clk-pins {
++				pinmux = <PINMUX(PIN_EMMC_CLK, 0)>;
++				bias-pull-down;
++				power-source = <3300>;
++			};
++
++			emmc-cmd-data-pins {
++				pinmux = <PINMUX(PIN_EMMC_CMD, 0)>,
++					 <PINMUX(PIN_EMMC_DAT0, 0)>,
++					 <PINMUX(PIN_EMMC_DAT1, 0)>,
++					 <PINMUX(PIN_EMMC_DAT2, 0)>,
++					 <PINMUX(PIN_EMMC_DAT3, 0)>,
++					 <PINMUX(PIN_EMMC_RSTN, 0)>;
++				bias-pull-up;
++				power-source = <3300>;
++			};
++		};
++	};
++
++	emmc: mmc@4300000 {
++		compatible = "sophgo,cv1800b-dwcmshc";
++		reg = <0x4300000 0x1000>;
++		interrupts = <34 IRQ_TYPE_LEVEL_HIGH>;
++		clocks = <&clk CLK_AXI4_EMMC>, <&clk CLK_EMMC>;
++		clock-names = "core", "bus";
++		bus-width = <4>;
++		non-removable;
++		no-sd;
++		no-sdio;
++		cap-mmc-hw-reset;
++		pinctrl-names = "default";
++		pinctrl-0 = <&emmc_pins>;
++		status = "okay";
++	};
++};
