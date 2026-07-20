@@ -1,0 +1,45 @@
+usb: dwc2: cv1800: enable host-mode DMA on CV18XX/SG200X
+
+Mainline's dwc2_set_cv1800_params() forces the Sophgo CV18XX/SG200X DWC2
+core into PIO (slave) mode for host transfers by setting host_dma = false.
+In PIO mode every USB packet is copied by the CPU from inside the dwc2
+interrupt handler. That is tolerable for enumeration and low-rate devices,
+but a high-throughput USB device that keeps a bulk-IN stream open (e.g. an
+MT7601U Wi-Fi adapter, which starts continuous RX as soon as it is
+initialised) generates a relentless interrupt load. On this single-core
+C906 that livelocks the CPU inside the IRQ handler: the console and
+scheduler stop and the board appears frozen. The lockup reproduces right
+after the mt7601u firmware handshake, before the adapter registers with
+mac80211.
+
+Enable buffer DMA for host mode instead. This is safe on this SoC:
+
+  - The Sophgo vendor 5.10 kernel runs this same core with host DMA
+    enabled (params.c: p->host_dma = dma_capable).
+  - The SoC is dma-noncoherent, but the DMA API's cache maintenance is
+    already exercised successfully by the stmmac Ethernet and SD/eMMC
+    controllers on this board, which do bus-master DMA. dwc2 uses the
+    same streaming-DMA path.
+
+Only plain buffer DMA is enabled (host_dma = true); descriptor DMA
+(dma_desc_enable) is deliberately left off, as buffer DMA is the
+well-tested dwc2 host configuration. g_dma is left false because these
+boards are only used in host mode here.
+
+With this change the MT7601U initialises and the system stays responsive.
+
+Signed-off-by: d622 <300083818+d622-au@users.noreply.github.com>
+
+diff --git a/drivers/usb/dwc2/params.c b/drivers/usb/dwc2/params.c
+index ccccccc..ddddddd 100644
+--- a/drivers/usb/dwc2/params.c
++++ b/drivers/usb/dwc2/params.c
+@@ -224,7 +224,7 @@ static void dwc2_set_cv1800_params(struct dwc2_hsotg *hsotg)
+
+ 	p->otg_caps.hnp_support = false;
+ 	p->otg_caps.srp_support = false;
+-	p->host_dma = false;
++	p->host_dma = true;
+ 	p->g_dma = false;
+ 	p->speed = DWC2_SPEED_PARAM_HIGH;
+ 	p->phy_type = DWC2_PHY_TYPE_PARAM_UTMI;
