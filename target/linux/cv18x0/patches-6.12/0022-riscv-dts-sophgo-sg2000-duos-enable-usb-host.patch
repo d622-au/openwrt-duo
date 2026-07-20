@@ -1,11 +1,13 @@
 riscv: dts: sophgo: sg2000: milkv-duos: enable USB in host mode
 
 Enable the shared DWC2 USB controller on the Milk-V Duo S and pin it to
-host mode. The single USB2 port is routed by the on-board FSUSB30 mux,
-which selects the type-A socket whenever the type-C VBUS is absent, so
-host-only needs no mux GPIO. The type-A VBUS is driven by the SoC's
-USB_VBUS_EN pad (reset-default function), which the USB PHY asserts when
-it enters host mode.
+host mode. This board has a single USB2 port multiplexed between the
+type-A host socket and the type-C device socket, so forcing host mode
+here is necessary but not sufficient: routing the FSUSB30 data mux to the
+type-A socket and enabling that socket's 5 V VBUS are done with two board
+GPIOs in the follow-up patch 0029 (usb-host-mux-and-vbus). Without those,
+a device on the type-A port does not enumerate even though the root hub
+comes up.
 
 Signed-off-by: d622 <300083818+d622-au@users.noreply.github.com>
 

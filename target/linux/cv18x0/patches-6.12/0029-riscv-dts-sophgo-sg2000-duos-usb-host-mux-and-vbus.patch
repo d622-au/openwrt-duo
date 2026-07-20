@@ -1,0 +1,101 @@
+riscv: dts: sophgo: sg2000: milkv-duos: switch USB to the type-A host port
+
+The Milk-V Duo S has a single USB2 port shared between the type-A host
+socket and the type-C device socket. Bringing DWC2 up in host mode is not
+enough: two SoC GPIOs must be driven high to actually use the type-A
+socket, mirroring the vendor's device/generic/rootfs_overlay/duos/
+mnt/system/usb-host.sh:
+
+  usb_select = XGPIOA[30] = porta 30 (pad AUX0)        -> FSUSB30 data mux
+      (U9): 1 routes the SoC D+/D- to the type-A socket (else they stay on
+      the type-C device socket).
+  usb_en     = XGPIOB[5]  = portb 5  (pad USB_VBUS_EN) -> load switch
+      (U10, SY6280AAC): 1 enables the type-A socket's 5 V VBUS.
+
+Without the mux select, a device plugged into the type-A port never
+enumerates even though the root hub is up and host mode is forced, because
+the data lines are routed to the type-C connector -- the observed symptom
+(no dmesg / lsusb change on hotplug).
+
+An earlier version of this patch drove only VBUS, and on the wrong bit:
+XGPIOB[6] / portb 6 is USB_VBUS_DET (USB_VBUS_DET__XGPIOB_6 = 3), an input
+used for device-mode VBUS sensing, which the vendor *kernel* DTS happens
+to reference as "vbus-gpio = <&portb 6>". The enable is XGPIOB[5]. The
+XGPIO[n] == port[n] mapping is the same one already relied on for
+CAM_RST0 (XGPIOA_2 == <&porta 2>) in patch 0024.
+
+Mux both pads to GPIO (function 3) and hold them high with gpio-hogs; the
+port is host-only so both stay asserted. AUX0 is on the 3.3 V VDDIO_EMMC
+rail (same as the eMMC pins in patch 0023); USB_VBUS_EN is on 1.8 V
+VDDIO18_1. Mux values are from the vendor pin list
+freertos/cvitek/hal/cv181x/config/cv181x_pinlist_swconfig.h:
+  USB_VBUS_EN__XGPIOB_5 = 3
+  AUX0__XGPIOA_30       = 3
+
+Signed-off-by: d622 <300083818+d622-au@users.noreply.github.com>
+
+--- a/arch/riscv/boot/dts/sophgo/sg2000-milkv-duos.dts
++++ b/arch/riscv/boot/dts/sophgo/sg2000-milkv-duos.dts
+@@ -245,3 +245,62 @@
+ &tempsen {
+ 	status = "okay";
+ };
++
++/*
++ * USB type-A host mode (Duo S sheet 8, "USB HOST" + "USB SWITCH").
++ *
++ * The single USB2 port is shared between the type-A host socket and the
++ * type-C device socket. Two GPIOs put it in host mode, mirroring the
++ * vendor duos/mnt/system/usb-host.sh (which sets usb_select then usb_en):
++ *
++ *   porta 30 = XGPIOA[30], pad AUX0        -> FSUSB30 data mux (U9):
++ *       1 routes the SoC D+/D- to the type-A socket.
++ *   portb 5  = XGPIOB[5],  pad USB_VBUS_EN -> load switch (U10, SY6280AAC):
++ *       1 enables the type-A socket's 5 V VBUS.
++ *
++ * Without the mux select the data lines stay on the type-C socket and a
++ * device on the type-A port never enumerates despite host mode. NB
++ * XGPIOB[6]/portb 6 is USB_VBUS_DET (an input), not the VBUS enable.
++ *
++ * Both pads are muxed to GPIO (function 3) and held high by gpio-hogs --
++ * the port is host-only. AUX0 is on the 3.3 V VDDIO_EMMC rail (as the
++ * eMMC pins), USB_VBUS_EN on 1.8 V VDDIO18_1. Mux values from the vendor
++ * pin list cv181x_pinlist_swconfig.h: USB_VBUS_EN__XGPIOB_5 = 3,
++ * AUX0__XGPIOA_30 = 3.
++ */
++&{/soc/pinctrl@3001000} {
++	usb_host_pins: usb-host-pins {
++		usb-vbus-en-grp {
++			pinmux = <PINMUX(PIN_USB_VBUS_EN, 3)>;
++			power-source = <1800>;
++		};
++
++		usb-port-sel-grp {
++			pinmux = <PINMUX(PIN_AUX0, 3)>;
++			power-source = <3300>;
++		};
++	};
++};
++
++&usb {
++	pinctrl-names = "default";
++	pinctrl-0 = <&usb_host_pins>;
++};
++
++&porta {
++	usb-port-sel-hog {
++		gpio-hog;
++		gpios = <30 0>;		/* porta 30 = XGPIOA[30], USB_PORT_SEL */
++		output-high;		/* 1 = route D+/D- to type-A host socket */
++		line-name = "usb-port-sel";
++	};
++};
++
++&portb {
++	usb-vbus-en-hog {
++		gpio-hog;
++		gpios = <5 0>;		/* portb 5 = XGPIOB[5], USB_VBUS_EN */
++		output-high;		/* 1 = enable type-A VBUS switch U10 */
++		line-name = "usb-vbus-en";
++	};
++};
