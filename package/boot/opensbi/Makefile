@@ -50,7 +50,15 @@ export GCC_HONOUR_COPTS=s
 MAKE_VARS = \
 	CROSS_COMPILE="$(TARGET_CROSS)"
 
-ifdef CONFIG_TARGET_DEVICE_cv18x0_generic_DEVICE_milkv_duo
+# OpenSBI needs a bootstrap FDT compiled in (FW_FDT_PATH). The cvitek FSBL
+# hands OpenSBI no valid FDT in a1, so without an embedded FDT OpenSBI faults
+# before console init and the FSBL watchdog resets the board (boot loops right
+# after "Jump to monitor"). The cv1800b dtb serves as OpenSBI's bootstrap FDT
+# for every cv18x0 device -- it only drives OpenSBI's own console/low-memory
+# setup; each board's kernel still gets its real dtb from the FIT image. Key
+# off the target symbol so this fires in both single- and multi-profile builds
+# (the old device-specific guard silently dropped the FDT under multi-profile).
+ifdef CONFIG_TARGET_cv18x0
 FW_FDT_PATH=$(STAGING_DIR_IMAGE)/cv1800b-milkv-duo.dtb
 endif
 

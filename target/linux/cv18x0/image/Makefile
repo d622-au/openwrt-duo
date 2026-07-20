@@ -10,31 +10,26 @@ FAT32_BLOCKS=$(shell echo $$(($(CONFIG_CV18X0_SD_BOOT_PARTSIZE)*1024*1024/$(FAT3
 
 KERNEL_LOADADDR:=0x80200000
 
-# The FIP (BL2 + DDR params + OpenSBI + U-Boot) placed in the FAT boot
-# partition is currently taken from a known-good prebuilt file,
-# ./prebuilt/$(FIP) (not tracked in git), rather than from the fiptool
-# output. Recreating fip.bin from the in-tree components is a separate,
-# future activity. The fiptool step below is kept so the entire firmware
-# chain (cv18xxlibs BL2 blobs, OpenSBI, U-Boot, the fiptool host tool)
-# continues to build; only the copy into the boot partition differs.
-# The FIP is per-device because the BL2/FSBL inside it is chip-family
-# specific: a cv180x (CV1800B) BL2 panics on cv181x (SG2000/SG2002)
-# silicon and vice versa -- the mask ROM log ends in "E:RESET:panic:-1".
-DEVICE_VARS += FIP
+# The FIP (FSBL/BL2 + DDR params + OpenSBI + U-Boot) placed in the FAT boot
+# partition is assembled here by fiptool from the in-tree components: the
+# per-chip BL2 built from source by package/boot/cv18xxlibs, plus OpenSBI and
+# U-Boot. It is per-device because the BL2/FSBL inside it is chip-family
+# specific: a cv180x (CV1800B) BL2 panics on cv181x (SG2000/SG2002) silicon
+# and vice versa -- the mask ROM log ends in "E:RESET:panic:-1".
+DEVICE_VARS += BL2 FIP DDRPARAM UBOOT
 
 define Build/riscv-sdcard
 	rm -f $@.boot #$(KDIR_TMP)/$(IMG_PREFIX)-$(PROFILE)-boot.img
 	mkfs.fat $@.boot  -C $(FAT32_BLOCKS)
 
-	$(STAGING_DIR_HOST)/bin/fiptool --fsbl $(STAGING_DIR_IMAGE)/bl2_cv1800b_milkv_duo_sd.bin \
+	$(STAGING_DIR_HOST)/bin/fiptool --fsbl $(STAGING_DIR_IMAGE)/$(BL2) \
 		--opensbi $(STAGING_DIR_IMAGE)/fw_dynamic-generic.bin \
 		--uboot $(STAGING_DIR_IMAGE)/$(UBOOT)-u-boot.bin \
 		--ddr_param $(STAGING_DIR_IMAGE)/$(DDRPARAM) \
 		--rtos /dev/null \
-		$(STAGING_DIR_IMAGE)/fip_milkv_duo.bin
+		$(STAGING_DIR_IMAGE)/$(FIP)
 
-	[ -s ./prebuilt/$(FIP) ] || { echo "ERROR: prebuilt boot firmware ./prebuilt/$(FIP) is missing (see comment above Build/riscv-sdcard)" >&2; exit 1; }
-	mcopy -i $@.boot ./prebuilt/$(FIP) ::fip.bin
+	mcopy -i $@.boot $(STAGING_DIR_IMAGE)/$(FIP) ::fip.bin
 	mcopy -i $@.boot $(IMAGE_KERNEL) ::sd.boot
 
 	./gen_cv18x0_sdcard_img.sh \
@@ -60,6 +55,13 @@ define Device/FitImageLzma
 	KERNEL_NAME := Image
 endef
 
+# KNOWN ISSUE (CV1800B / Duo): the cv180x BL2 built from duo-buildroot-sdk-v2
+# hangs at the FSBL->OpenSBI handoff on real hardware (freezes right after
+# "Jump to monitor"; no OpenSBI banner). The Duo S / Duo 256M (cv181x, same
+# sdk-v2 FSBL codebase + the same OpenSBI/U-Boot) boot to the Linux console;
+# OpenSBI and its embedded 63.75 MiB FDT were verified byte-identical to the
+# known-good firmware, so the fault is isolated to the sdk-v2 cv180x BL2 build.
+# See package/boot/cv18xxlibs/README.md ("Known issue: CV1800B") for details.
 define Device/milkv_duo
   $(call Device/FitImageLzma)
   DEVICE_VENDOR := MilkV
@@ -68,6 +70,7 @@ define Device/milkv_duo
   DEVICE_DTS := $$(SOC)-milkv-duo
   DEVICE_PACKAGES := opensbi_generic
   UBOOT := milkv_duo
+  BL2 := bl2_cv1800b_milkv_duo_sd.bin
   DDRPARAM := cv181x_ddr_param.bin
   FIP := fip_milkv_duo.bin
 endef
@@ -81,6 +84,7 @@ define Device/milkv_duo256m
   DEVICE_DTS := $$(SOC)-milkv-duo256m
   DEVICE_PACKAGES := opensbi_generic
   UBOOT := milkv_duo
+  BL2 := bl2_cv181x_milkv_sd.bin
   DDRPARAM := cv181x_ddr_param.bin
   FIP := fip_milkv_duo256m.bin
 endef
@@ -94,11 +98,12 @@ define Device/milkv_duos
   DEVICE_DTS := $$(SOC)-milkv-duos
   DEVICE_PACKAGES := opensbi_generic
   UBOOT := milkv_duo
-  DDRPARAM := cv181x_ddr_param.bin
   # The SG2000 (Duo S) shares the SG2002 256M's boot chain: the CV181x
   # FSBL build is identical (cv181x / ddr3_1866_x16) and auto-detects
-  # the 512 MiB DDR3 density from package strapping, so the prebuilt
-  # FIP is the same bytes under a per-device name.
+  # the 512 MiB DDR3 density from package strapping, so the same CV181x
+  # BL2 is reused; only the output FIP name differs per device.
+  BL2 := bl2_cv181x_milkv_sd.bin
+  DDRPARAM := cv181x_ddr_param.bin
   FIP := fip_milkv_duos.bin
 endef
 TARGET_DEVICES += milkv_duos

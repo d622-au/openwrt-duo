@@ -4,6 +4,10 @@
 # This is free software, licensed under the GNU General Public License v2.
 # See /LICENSE for more information.
 #
+# The fiptool itself is Sophgo's "FIP Generator for Milk-V Series Board", a
+# Python packer that wraps the FSBL/BL2, OpenSBI, U-Boot and DDR params into the
+# CV18xx FIP container the mask ROM expects. Upstream: github.com/sophgo/fiptool.
+#
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=fiptool

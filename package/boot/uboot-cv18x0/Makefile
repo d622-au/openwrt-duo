@@ -46,6 +46,14 @@ UBOOT_TARGETS := \
 define Build/Configure
 	$(call Build/Configure/U-Boot)
 	sed -i 's/CONFIG_TOOLS_LIBCRYPTO=y/# CONFIG_TOOLS_LIBCRYPTO is not set/' $(PKG_BUILD_DIR)/.config
+	# Boot the OpenWrt kernel FIT image (sd.boot) from the SD card FAT32 boot
+	# partition (mmc 0:1) at 0x82000000. The default bootstd/distro-boot flow
+	# does not locate it, so force an explicit bootcmd (strip any inherited
+	# BOOTSTD/BOOTCOMMAND lines first so ours is authoritative).
+	sed -i '/CONFIG_USE_BOOTCOMMAND\|CONFIG_BOOTSTD_BOOTCOMMAND\|CONFIG_BOOTCOMMAND/d' $(PKG_BUILD_DIR)/.config
+	echo '# CONFIG_BOOTSTD_BOOTCOMMAND is not set' >> $(PKG_BUILD_DIR)/.config
+	echo 'CONFIG_USE_BOOTCOMMAND=y' >> $(PKG_BUILD_DIR)/.config
+	echo 'CONFIG_BOOTCOMMAND="fatload mmc 0:1 0x82000000 sd.boot; bootm 0x82000000"' >> $(PKG_BUILD_DIR)/.config
 endef
 
 define Build/InstallDev

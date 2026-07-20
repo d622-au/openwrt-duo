@@ -1,0 +1,91 @@
+--- a/drivers/mmc/cv1800b_sdhci.c
++++ b/drivers/mmc/cv1800b_sdhci.c
+@@ -7,12 +7,40 @@
+ #include <mmc.h>
+ #include <sdhci.h>
+ #include <linux/delay.h>
++#include <linux/io.h>
+ 
+ #define SDHCI_PHY_TX_RX_DLY  0x240
+ #define MMC_MAX_CLOCK        375000000
+ #define TUNE_MAX_PHCODE      128
+ 
++/*
++ * Sophgo CV18xx vendor-specific register block. SDHCI_RESET_ALL (issued
++ * by sdhci_init()) clears this block, and mainline U-Boot has no reset
++ * hook to restore it, so the SD PHY is left at its reset defaults and the
++ * card never responds ("Card did not respond to voltage select! : -110").
++ * Re-apply the DS/HS PHY configuration after every reset, exactly as both
++ * the Cvitek vendor U-Boot (cvi_general_reset) and the mainline kernel
++ * (cv18xx_sdhci_reset in sdhci-of-dwcmshc.c) do.
++ */
++#define CVI_SDHCI_VENDOR_OFFSET  0x200
++#define CVI_SDHCI_MSHC_CTRL      (CVI_SDHCI_VENDOR_OFFSET + 0x00)
++#define CVI_SDHCI_PHY_CONFIG     (CVI_SDHCI_VENDOR_OFFSET + 0x4C)
++#define CVI_MSHC_CTRL_LATANCY_1T BIT(1)
++#define CVI_PHY_CONFIG_TX_BPS    BIT(0)
++
++/*
++ * SD power/voltage switch control in the SoC TOP register block. The
++ * mainline driver never programs this; the Cvitek vendor U-Boot writes
++ * 0x9 on SD probe: power-switch enabled, 3.3V (en_pwrsw=1, vsel=0,
++ * disc=0, auto=1). This register lives outside the SDHCI controller, so
++ * it is not affected by SDHCI_RESET_ALL. Written defensively in probe in
++ * case the FSBL (or a previous 1.8V kernel run) left it elsewhere.
++ */
++#define CVI_TOP_SD_PWRSW_CTRL  0x030001f4
++#define CVI_TOP_SD_PWRSW_3V3   0x9
++
+ #define PHY_TX_SRC_INVERT  BIT(8)
++#define PHY_RX_SRC_INVERT  BIT(24)
+ 
+ struct cv1800b_sdhci_plat {
+ 	struct mmc_config cfg;
+@@ -31,6 +59,29 @@
+ 		udelay(10);
+ }
+ 
++/*
++ * Called at the start of every sdhci_set_ios(), i.e. after sdhci_init()'s
++ * SDHCI_RESET_ALL and before the first card command. Restore the vendor
++ * PHY block that the reset wiped.
++ */
++static void cv1800b_sdhci_set_control_reg(struct sdhci_host *host)
++{
++	u32 val;
++
++	sdhci_set_control_reg(host);
++
++	val = sdhci_readl(host, CVI_SDHCI_MSHC_CTRL);
++	val |= CVI_MSHC_CTRL_LATANCY_1T;
++	sdhci_writel(host, val, CVI_SDHCI_MSHC_CTRL);
++
++	val = sdhci_readl(host, CVI_SDHCI_PHY_CONFIG);
++	val |= CVI_PHY_CONFIG_TX_BPS;
++	sdhci_writel(host, val, CVI_SDHCI_PHY_CONFIG);
++
++	sdhci_writel(host, PHY_TX_SRC_INVERT | PHY_RX_SRC_INVERT,
++		     SDHCI_PHY_TX_RX_DLY);
++}
++
+ static int cv1800b_execute_tuning(struct mmc *mmc, u8 opcode)
+ {
+ 	struct sdhci_host *host = dev_get_priv(mmc->dev);
+@@ -63,6 +114,7 @@
+ }
+ 
+ const struct sdhci_ops cv1800b_sdhci_sd_ops = {
++	.set_control_reg = cv1800b_sdhci_set_control_reg,
+ 	.platform_execute_tuning = cv1800b_execute_tuning,
+ };
+ 
+@@ -98,6 +150,9 @@
+ 	if (ret)
+ 		return ret;
+ 
++	/* Force the SD power rail to 3.3V before card initialization. */
++	writel(CVI_TOP_SD_PWRSW_3V3, (void __iomem *)CVI_TOP_SD_PWRSW_CTRL);
++
+ 	return sdhci_probe(dev);
+ }
+ 
