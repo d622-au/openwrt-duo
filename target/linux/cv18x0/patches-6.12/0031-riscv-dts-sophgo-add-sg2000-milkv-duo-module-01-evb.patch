@@ -1,0 +1,278 @@
+riscv: dts: sophgo: add Milk-V Duo Module 01 EVB board
+
+Add a board file for the Milk-V Duo Module 01 Evaluation Board: a Duo
+Module 01 SoM (Sophgo SG2000, 512 MiB in-package DDR3, on-module 8 GiB
+eMMC, on-module Wi-Fi 6/BT) on the Milk-V EVB carrier (microSD, RJ45 on
+the SoC's internal 100M PHY, shared USB type-A/type-C port, camera/DSI
+connectors, analog audio, 26-pin header).
+
+The file is derived from sg2000-milkv-duos.dts -- same SoC, same in-tree
+cv1800b.dtsi baseline -- and carries over exactly the pieces already
+proven on this EVB while it ran Duo S images during bring-up:
+
+ - the on-module eMMC (mmc@4300000 + SG2000 pinctrl eMMC pad group; the
+   pads are otherwise left unconfigured when booting from microSD);
+ - USB type-A host mode with the same two GPIO hogs: porta 30
+   (XGPIOA[30], data mux select -- confirmed required on this EVB) and
+   portb 5 (XGPIOB[5], type-A VBUS enable, carried from the Duo S
+   wiring);
+ - gmac0, microSD, uart0, watchdog, SARADC (the EVB routes three
+   channels to a connector) and the on-chip tempsen.
+
+The camera control plane (i2c3 + CAM_MCLK0/CAM_RST0 static pad mux) is
+included because the EVB's J8 CSI connector is Duo-camera compatible and
+the SoM exposes the same pads; the bench-only MCLK/reset scaffold from
+patch 0025 is deliberately not duplicated here. The on-module Wi-Fi/BT
+part has no in-tree driver and is not described.
+
+Signed-off-by: d622 <300083818+d622-au@users.noreply.github.com>
+
+--- a/arch/riscv/boot/dts/sophgo/Makefile
++++ b/arch/riscv/boot/dts/sophgo/Makefile
+@@ -2,5 +2,6 @@
+ dtb-$(CONFIG_ARCH_SOPHGO) += cv1800b-milkv-duo.dtb
+ dtb-$(CONFIG_ARCH_SOPHGO) += sg2002-milkv-duo256m.dtb
+ dtb-$(CONFIG_ARCH_SOPHGO) += sg2000-milkv-duos.dtb
++dtb-$(CONFIG_ARCH_SOPHGO) += sg2000-milkv-duo-module-01-evb.dtb
+ dtb-$(CONFIG_ARCH_SOPHGO) += cv1812h-huashan-pi.dtb
+ dtb-$(CONFIG_ARCH_SOPHGO) += sg2042-milkv-pioneer.dtb
+--- a/arch/riscv/boot/dts/sophgo/sg2000-milkv-duo-module-01-evb.dts
++++ b/arch/riscv/boot/dts/sophgo/sg2000-milkv-duo-module-01-evb.dts
+@@ -0,0 +1,237 @@
++// SPDX-License-Identifier: (GPL-2.0 OR MIT)
++/*
++ * Copyright (C) 2026 OpenWrt.org
++ *
++ * Milk-V Duo Module 01 Evaluation Board: a Duo Module 01 SoM (Sophgo
++ * SG2000, CV181x family, 512 MiB in-package DDR3, on-module 8 GiB eMMC,
++ * on-module Wi-Fi 6 / BT module) on the Milk-V EVB carrier (microSD slot,
++ * RJ45 on the SoC's internal 100M PHY, USB type-A/type-C shared port,
++ * camera and DSI connectors, analog audio, 26-pin GPIO header).
++ *
++ * Like sg2000-milkv-duos.dts, this file is built on cv1800b.dtsi: the
++ * OpenWrt 6.12 kernel does not carry the mainline cv180x/cv181x split, and
++ * the SG2000's peripheral IP is register-compatible with the cv1800b, so
++ * only the board identity and the board-level wiring are described here.
++ * Switch to the mainline board files once the kernel is new enough.
++ *
++ * The on-module Wi-Fi/BT part has no in-tree driver and is not described.
++ */
++
++/dts-v1/;
++
++#include "cv1800b.dtsi"
++#include <dt-bindings/pinctrl/pinctrl-sg2000.h>
++
++/ {
++	model = "Milk-V Duo Module 01 EVB";
++	compatible = "milkv,duo-module-01-evb", "milkv,duo-module-01",
++		     "sophgo,sg2000";
++
++	aliases {
++		serial0 = &uart0;
++		serial1 = &uart1;
++		serial2 = &uart2;
++		serial3 = &uart3;
++		serial4 = &uart4;
++		i2c3 = &i2c3;
++	};
++
++	chosen {
++		stdout-path = "serial0:115200n8";
++		bootargs = "root=/dev/mmcblk0p2 rootwait rw";
++	};
++
++	/* The SG2000 has 512 MiB of in-package DDR3. */
++	memory@80000000 {
++		device_type = "memory";
++		reg = <0x80000000 0x20000000>;
++	};
++};
++
++&osc {
++	clock-frequency = <25000000>;
++};
++
++/* EVB RJ45, wired to the SoC's internal 100M PHY like the Duo S. */
++&gmac0 {
++	status = "okay";
++};
++
++/* EVB microSD slot (the boot device). */
++&sdhci0 {
++	status = "okay";
++	bus-width = <4>;
++	no-1-8-v;
++	no-mmc;
++	no-sdio;
++	disable-wp;
++};
++
++&uart0 {
++	status = "okay";
++};
++
++&watchdog0 {
++	status = "okay";
++};
++
++&usb {
++	dr_mode = "host";
++	status = "okay";
++};
++
++/*
++ * On-module 8 GiB eMMC on the CV181x-only third MMC controller, which the
++ * shared cv18xx.dtsi (from the CV1800B, that lacks it) does not describe.
++ * Same setup as the Duo S: because we boot from the microSD, neither the
++ * FSBL (which only configures the eMMC pads in its eMMC-boot path) nor
++ * U-Boot ever sets up the eMMC pins, and the open-drain CMD/DAT pads float
++ * without pull-ups so the card never answers CMD1. Instantiate the SG2000
++ * pin controller and replicate the vendor FSBL emmc_pad_setting(): mux the
++ * pads to eMMC (function 0), pull-up on CMD/DAT/RSTN, pull-down on CLK.
++ */
++&{/soc} {
++	pinctrl@3001000 {
++		compatible = "sophgo,sg2000-pinctrl";
++		reg = <0x03001000 0x1000>,
++		      <0x05027000 0x1000>;
++		reg-names = "sys", "rtc";
++
++		emmc_pins: emmc-pins {
++			emmc-clk-pins {
++				pinmux = <PINMUX(PIN_EMMC_CLK, 0)>;
++				bias-pull-down;
++				power-source = <3300>;
++			};
++
++			emmc-cmd-data-pins {
++				pinmux = <PINMUX(PIN_EMMC_CMD, 0)>,
++					 <PINMUX(PIN_EMMC_DAT0, 0)>,
++					 <PINMUX(PIN_EMMC_DAT1, 0)>,
++					 <PINMUX(PIN_EMMC_DAT2, 0)>,
++					 <PINMUX(PIN_EMMC_DAT3, 0)>,
++					 <PINMUX(PIN_EMMC_RSTN, 0)>;
++				bias-pull-up;
++				power-source = <3300>;
++			};
++		};
++	};
++
++	emmc: mmc@4300000 {
++		compatible = "sophgo,cv1800b-dwcmshc";
++		reg = <0x4300000 0x1000>;
++		interrupts = <34 IRQ_TYPE_LEVEL_HIGH>;
++		clocks = <&clk CLK_AXI4_EMMC>, <&clk CLK_EMMC>;
++		clock-names = "core", "bus";
++		bus-width = <4>;
++		non-removable;
++		no-sd;
++		no-sdio;
++		cap-mmc-hw-reset;
++		pinctrl-names = "default";
++		pinctrl-0 = <&emmc_pins>;
++		status = "okay";
++	};
++};
++
++/*
++ * USB type-A host mode. Like the Duo S, the single USB2 port is shared
++ * between the type-A host socket and the type-C device socket (the vendor
++ * firmware defaults the type-C side to a USB-NCM gadget); host mode on the
++ * type-A socket needs the same two board GPIOs driven high:
++ *
++ *   porta 30 = XGPIOA[30], pad AUX0        -> data mux select: 1 routes the
++ *       SoC D+/D- to the type-A socket (confirmed required on this EVB).
++ *   portb 5  = XGPIOB[5],  pad USB_VBUS_EN -> type-A 5 V VBUS enable
++ *       (carried over from the Duo S wiring; confirmed working on this EVB).
++ *
++ * Both pads are muxed to GPIO (function 3) and held high by gpio-hogs --
++ * the port is used host-only, giving up the type-C device function. Mux
++ * values from the vendor pin list cv181x_pinlist_swconfig.h:
++ * USB_VBUS_EN__XGPIOB_5 = 3, AUX0__XGPIOA_30 = 3.
++ */
++&{/soc/pinctrl@3001000} {
++	usb_host_pins: usb-host-pins {
++		usb-vbus-en-grp {
++			pinmux = <PINMUX(PIN_USB_VBUS_EN, 3)>;
++			power-source = <1800>;
++		};
++
++		usb-port-sel-grp {
++			pinmux = <PINMUX(PIN_AUX0, 3)>;
++			power-source = <3300>;
++		};
++	};
++};
++
++&usb {
++	pinctrl-names = "default";
++	pinctrl-0 = <&usb_host_pins>;
++};
++
++&porta {
++	usb-port-sel-hog {
++		gpio-hog;
++		gpios = <30 0>;		/* porta 30 = XGPIOA[30], USB_PORT_SEL */
++		output-high;		/* 1 = route D+/D- to type-A host socket */
++		line-name = "usb-port-sel";
++	};
++};
++
++&portb {
++	usb-vbus-en-hog {
++		gpio-hog;
++		gpios = <5 0>;		/* portb 5 = XGPIOB[5], USB_VBUS_EN */
++		output-high;		/* 1 = enable type-A VBUS switch */
++		line-name = "usb-vbus-en";
++	};
++};
++
++/*
++ * Camera control plane, mirroring the Duo S: the EVB's J8 16-pin CSI
++ * connector is Duo-camera compatible (CAM-GC2083), and the SoM exposes the
++ * same IIC3 / CAM_MCLK0 / CAM_RST0 pads. As on the Duo S this is Milestone
++ * 0 only -- the sensor's I2C bus and static pad mux; no MIPI capture
++ * pipeline exists in this tree. The dynamic half (MCLK gate, reset release)
++ * is deliberately not wired here; use the Duo S bench-test scaffold (patch
++ * 0025) as a template when exercising a sensor on this board.
++ */
++&{/soc/pinctrl@3001000} {
++	i2c3_pins: i2c3-pins {
++		i2c3-grp {
++			pinmux = <PINMUX(PIN_IIC3_SCL, 0)>,
++				 <PINMUX(PIN_IIC3_SDA, 0)>;
++			power-source = <1800>;
++		};
++	};
++
++	cam0_mclk_pins: cam0-mclk-pins {
++		cam0-mclk-grp {
++			pinmux = <PINMUX(PIN_CAM_MCLK0, 0)>;
++			power-source = <1800>;
++		};
++	};
++
++	cam0_rst_pins: cam0-rst-pins {
++		cam0-rst-grp {
++			pinmux = <PINMUX(PIN_CAM_RST0, 3)>;
++			power-source = <1800>;
++		};
++	};
++};
++
++&i2c3 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&i2c3_pins &cam0_mclk_pins &cam0_rst_pins>;
++	clock-frequency = <100000>;
++	status = "okay";
++};
++
++/* The EVB routes three SARADC channels to a connector. */
++&saradc {
++	status = "okay";
++};
++
++&tempsen {
++	status = "okay";
++};

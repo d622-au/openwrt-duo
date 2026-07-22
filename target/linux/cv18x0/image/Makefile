@@ -108,4 +108,21 @@ define Device/milkv_duos
 endef
 TARGET_DEVICES += milkv_duos
 
+define Device/milkv_duo_module_01_evb
+  $(call Device/FitImageLzma)
+  DEVICE_VENDOR := MilkV
+  DEVICE_MODEL := Duo Module 01 EVB
+  SOC := sg2000
+  DEVICE_DTS := $$(SOC)-milkv-duo-module-01-evb
+  DEVICE_PACKAGES := opensbi_generic
+  UBOOT := milkv_duo
+  # The Duo Module 01 carries the same SG2000 as the Duo S, so the whole
+  # Duo S boot chain (CV181x BL2, DDR params, U-Boot) is reused unchanged;
+  # only the output FIP name and the DTB differ.
+  BL2 := bl2_cv181x_milkv_sd.bin
+  DDRPARAM := cv181x_ddr_param.bin
+  FIP := fip_milkv_duo_module_01_evb.bin
+endef
+TARGET_DEVICES += milkv_duo_module_01_evb
+
 $(eval $(call BuildImage))
